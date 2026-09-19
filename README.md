@@ -1,48 +1,67 @@
 # World Layoffs — SQL Data Cleaning
 
-Cleaning a raw dataset of tech layoffs (March 2020 – March 2023) in MySQL, turning a messy CSV import into a table that can actually be queried.
+Cleaning a dataset of tech layoffs from March 2020 to March 2023 in MySQL. The raw CSV had duplicates, inconsistent spellings, dates stored as text and missing values, so none of it was really queryable as-is.
 
-> Built by following along with Alex The Analyst's SQL data cleaning series, then extended with my own checks and notes. <!-- TODO: edit or delete this line depending on how you worked through it -->
+**Tools:** MySQL 8.0 · MySQL Workbench
 
-## Dataset
+---
 
-- **Source:** <!-- TODO: link to where you got layoffs.csv -->
-- **Rows (raw):** <!-- TODO --> · **Rows (cleaned):** <!-- TODO -->
-- **Columns:** company, location, industry, total_laid_off, percentage_laid_off, date, stage, country, funds_raised_millions
+## The data
+
+Source: [layoffs.csv](https://github.com/AlexTheAnalyst/MySQL-YouTube-Series/blob/main/layoffs.csv)
+
+`company` · `location` · `industry` · `total_laid_off` · `percentage_laid_off` · `date` · `stage` · `country` · `funds_raised_millions`
+
+---
+
+## What I fixed
+
+### Duplicates
+
+No id column, so a duplicate here means a row identical across all nine columns. `ROW_NUMBER()` partitioned by every column numbers the copies inside each group, so anything past 1 is a duplicate:
+
+```sql
+ROW_NUMBER() OVER (
+    PARTITION BY company, location, industry, total_laid_off,
+                 percentage_laid_off, `date`, stage, country,
+                 funds_raised_millions
+) AS row_num
+```
+
+MySQL won't let you `DELETE` out of a CTE, so I wrote those row numbers into a second table and deleted from there.
+
+### Messy text
+
+Company names with leading spaces. `Crypto`, `Crypto Currency` and `CryptoCurrency` sitting there as three separate industries. `United States` and `United States.` as two separate countries. Any of these splits one group into several in a `GROUP BY`.
+
+### Dates stored as text
+
+The `date` column imported as `TEXT`, so it sorted alphabetically and no date functions worked on it.
+
+```sql
+UPDATE layoffs_staging2
+SET `date` = STR_TO_DATE(`date`, '%m/%d/%Y');
+
+ALTER TABLE layoffs_staging2
+MODIFY COLUMN `date` DATE;
+```
+
+### Missing industries
+
+Some rows had `NULL`, some had empty strings — same thing, but only one of them shows up in `IS NULL`. Set the blanks to `NULL` first, then backfilled from the same company's other rows with a self-join on company and location.
+
+### Empty rows
+
+Rows with no value for either `total_laid_off` or `percentage_laid_off` say nothing about the size of the layoff, so I dropped them.
+
+---
 
 ## Files
 
-| File | What it does |
-|---|---|
-| `01_data_cleaning.sql` | The full cleaning pipeline, with the diagnostic queries used to make each decision |
-| `data/layoffs.csv` | The raw dataset, as imported |
+```
+├── 01_data_cleaning.sql    the whole pipeline
+└── data/
+    └── layoffs.csv         raw data
+```
 
-## What was wrong with the data
-
-**Duplicate rows.** No primary key or unique id, so duplicates could only be identified as rows identical across all nine columns. Used `ROW_NUMBER()` partitioned by every column to number copies within each identical group, then deleted anything numbered higher than 1.
-
-**Inconsistent text.** Leading whitespace on company names. `Crypto`, `Crypto Currency` and `CryptoCurrency` recorded as three separate industries. `United States` and `United States.` recorded as two separate countries. All of these would have split a single group into several in any later aggregation.
-
-**Dates stored as text.** The `date` column imported as `TEXT`, so it sorted alphabetically instead of chronologically and no date functions worked on it. Converted with `STR_TO_DATE()` and the column type changed to `DATE`.
-
-**Missing industry values, two ways.** Some rows had `NULL`, others had an empty string — meaning the same thing but behaving differently in queries. Standardized to `NULL`, then backfilled from the same company's other rows using a self-join on company *and* location.
-
-**Rows with no layoff figures.** Rows missing both `total_laid_off` and `percentage_laid_off` say nothing about the size of the layoff and can't be imputed from anything else in the table. Removed.
-
-## Approach
-
-The raw `layoffs` table is never modified. Everything happens on staging copies, so the whole pipeline can be re-run from the original import.
-
-Every destructive statement is preceded by the `SELECT` used to confirm what it would affect. Those diagnostics are left in the script deliberately — they're the reasoning, not clutter.
-
-## Things I'd still change
-
-- `percentage_laid_off` is still stored as `TEXT` and should be a numeric type
-- A handful of companies appear once with no industry recorded and nothing to backfill from, so those remain `NULL`
-- No unique constraint added, so re-running the import could reintroduce duplicates
-
-## Next
-
-Exploratory analysis on the cleaned table — hardest-hit industries, layoffs over time, and companies that shut down entirely (`percentage_laid_off = 1`).
-
-<!-- TODO: delete the line above and replace with your findings once 02_exploratory_analysis.sql exists -->
+Every destructive statement in the script has the `SELECT` I used to check it right above it. The original `layoffs` table never gets touched — everything runs on copies, so the whole thing re-runs from the import.
